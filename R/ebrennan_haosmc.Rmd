@@ -1,0 +1,265 @@
+---
+title: "ebrennan_haosmc Analysis"
+author: "BM"
+date: "12/28/2021"
+mainfont: "Helvetica Light"
+output: 
+  pdf_document:
+    keep_md: yes
+always_allow_html: yes
+urlcolor: blue
+---
+
+# **Analysis**
+
+## **Overview**
+
+Salmon merged gene counts were created using Nextflow nf-core_rnaseq ([commit: 8094c42add](https://github.com/nf-core/rnaseq/commit/8094c42add6dcdf69ce54dfdec957789c37ae903)) using hg38 Homo_sapiens.GRCh38.dna_sm.primary_assembly.fa.gz and Homo_sapiens.GRCh38.96.gtf.gz. These data are used here in RDS format to run DESeq2 @Love2014.
+
+Data comprise of mRNA from Human aortic smooth muscle cells (haosmc) in `group` 'scrambled miRNA mimic' (`Scramble`) or 'let-7d miRNA mimic' (`Let7d`), and treated (`drug`) with no drug (`None`), TNF alpha alone (`TNFa`; 10ng/ml, 24hr), or in combination with one of the statins Atorvastatin or Lovastation (`Ator`, `Lova`; 1uM, 24hr). This leads to10 contrasts (i.e. comparisons) of interest: between `group` with `None` and with `TNFa` (2), and within `group` comparing `TNFa` with `None` (2), `Ator` (2), and `Lova` (2), and `Ator` with `Lova` (2). 
+
+Data is saved as XLSX and RDS for ongoing analysis in the `output` directory. Plots are displayed herein and saved to `output` as PDF.
+
+```{r setup, echo = FALSE, include = FALSE, message = FALSE}
+library(magrittr)
+library(DESeq2)
+devtools::install_github("brucemoran/RNAseqon", ref = "f60fb5c", force = TRUE)
+
+knitr::opts_chunk$set(echo = FALSE, 
+                      warning = FALSE,
+                      message = FALSE, 
+                      fig.width = 7, 
+                      fig.height = 7,
+                      dev = "pdf",
+                      dpi = 900,
+                      cache = TRUE)
+
+tag <- "ebrennan_haosmc"
+outdir <- c("../output/DESeq2")
+dir.create(outdir, recursive = TRUE, showWarnings = FALSE)
+knitr::opts_knit$set(root.dir = outdir) 
+
+count_se <- readRDS("../inst/data/salmon.merged.gene_counts.rds")
+coldata <- readr::read_csv("../inst/data/trt.csv") %>%
+           dplyr::mutate(group_drug = paste0(group, "_", drug)) %>%
+           dplyr::mutate(dplyr::across(c("group","drug"), factor))
+colData(count_se) <- cbind(colData(count_se), coldata[match(rownames(colData(count_se)), coldata$sampleID),])
+
+anno_tb <- tibble::as_tibble(rowData(count_se)) %>%
+           dplyr::select("ensembl_gene_id" = gene_id, "external_gene_name" = gene_name)
+countdata <- dplyr::mutate(.data = assay(count_se), dplyr::across(where(is.numeric), round, 0))
+
+dds <- DESeq2::DESeqDataSetFromMatrix(countData = countdata,
+                                      colData = as.data.frame(colData(count_se)),
+                                      design = ~ 1 + group + drug + group:drug)
+
+##function to process and filter by 0.05 padj
+filt_res <- function(resl, pval){
+  lapply(resl, function(res){
+  tibble::as_tibble(res, rownames = "ensembl_gene_id") %>% 
+  dplyr::filter(padj < pval) %>%
+  dplyr::left_join(., anno_tb) %>%
+  dplyr::select("external_gene_name", "ensembl_gene_id", everything())
+  })
+}
+  
+if(!file.exists(paste0(outdir, "/", tag, ".res_0.05.xlsx"))){
+  
+  ##run DESeq2, make results
+  ddseq <- DESeq2::DESeq(dds)
+
+  ## https://github.com/tavareshugo/tutorial_DESeq2_contrasts/blob/main/DESeq2_contrasts.md
+  mod_mat <- model.matrix(design(dds), colData(dds))
+  
+  Scramble_None_1 <- colMeans(mod_mat[dds$group == "Scramble" & dds$drug == "None", ]) 
+  Scramble_TNFa_2 <- colMeans(mod_mat[dds$group == "Scramble" & dds$drug == "TNFa", ])
+  Scramble_Ator_3 <- colMeans(mod_mat[dds$group == "Scramble" & dds$drug == "Ator", ])
+  Scramble_Lova_4<- colMeans(mod_mat[dds$group == "Scramble" & dds$drug == "Lova", ])
+  
+  Let7d_None_5 <- colMeans(mod_mat[dds$group == "Let7d" & dds$drug == "None", ])
+  Let7d_TNFa_6 <- colMeans(mod_mat[dds$group == "Let7d" & dds$drug == "TNFa", ])
+  Let7d_Ator_7 <- colMeans(mod_mat[dds$group == "Let7d" & dds$drug == "Ator", ])
+  Let7d_Lova_8 <- colMeans(mod_mat[dds$group == "Let7d" & dds$drug == "Lova", ])
+  
+  res_list <- list()
+  res_list[["Scramble_None_vs_Scramble_TNFa"]] <- DESeq2::results(ddseq, contrast = Scramble_None_1 - Scramble_TNFa_2) ## 2 vs 1
+  res_list[["Let7d_None_vs_Let7d_TNFa"]] <- DESeq2::results(ddseq, contrast = Let7d_None_5 - Let7d_TNFa_6) ## 6 vs 5
+  
+  res_list[["Let7d_None_vs_Scramble_None"]] <- DESeq2::results(ddseq, contrast = Let7d_None_5 - Scramble_None_1) ## 5 vs 1
+  res_list[["Let7d_TNFa_vs_Scramble_TNFa"]] <- DESeq2::results(ddseq, contrast = Let7d_TNFa_6 - Scramble_TNFa_2) ## 6 vs 2
+  res_list[["Scramble_Ator_vs_Scramble_TNFa"]] <- DESeq2::results(ddseq, contrast = Scramble_Ator_3 - Scramble_TNFa_2) ## 3 vs 2
+  res_list[["Scramble_Lova_vs_Scramble_TNFa"]] <- DESeq2::results(ddseq, contrast = Scramble_Lova_4 - Scramble_TNFa_2) ## 4 vs 2
+  res_list[["Let7d_Ator_vs_Let7d_TNFa"]] <- DESeq2::results(ddseq, contrast = Let7d_Ator_7 - Let7d_TNFa_6) ## 7 vs 6
+  res_list[["Let7d_Lova_vs_Let7d_TNFa"]] <- DESeq2::results(ddseq, contrast = Let7d_Lova_8 - Let7d_TNFa_6) ## 8 vs 6
+  
+  res_list[["Let7d_Ator_vs_Scramble_Ator"]] <- DESeq2::results(ddseq, contrast = Let7d_Ator_7 - Scramble_Ator_3) ## 7 vs 3
+  res_list[["Let7d_Lova_vs_Scramble_Lova"]] <- DESeq2::results(ddseq, contrast = Let7d_Lova_8 - Scramble_Lova_4) ## 8 vs 4
+  
+  
+  res_list[["Let7d_Ator_vs_Let7d_Lova"]] <- DESeq2::results(ddseq, contrast = Let7d_Ator_7 - Let7d_Lova_8) ## 7 vs 8
+  res_list[["Scramble_Ator_vs_Scramble_Lova"]] <- DESeq2::results(ddseq, contrast =  Scramble_Ator_3 - Scramble_Lova_4) ## 3 vs 4
+  
+  all_res_list <- filt_res(res_list, pval = 1)
+  filt_res_list <- filt_res(res_list, pval = 0.05)
+
+  writexl::write_xlsx(x = filt_res_list, path = paste0(outdir, "/", tag, ".res_0.05.xlsx"))
+  writexl::write_xlsx(x = all_res_list, path = paste0(outdir, "/", tag, ".res_full.xlsx"))
+  saveRDS(res_list, file = paste0(outdir, "/", tag, ".res_full.rds"))
+  saveRDS(dds, file = paste0(outdir, "/", tag, ".dds.rds"))
+  saveRDS(ddseq, file = paste0(outdir, "/", tag, ".ddseq.rds"))
+  
+} else {
+  res_list <- readRDS(paste0(outdir, "/", tag, ".res_full.rds"))
+  all_res_list <- filt_res(res_list, pval = 1)
+  filt_res_list <- filt_res(res_list, pval = 0.05)
+}
+```
+
+## **Differential Expression Analysis**
+
+The DESeq2 package (@love2014) was used to determine 'differentially expressed' genes (DEG) between each group and treatment. The full analysis code is available from www.github.com/brucemoran/ebrennan_haosmc. Table 1a outlines the number of DEG between each 'contrast', i.e. group/treatment being compared, at three levels of false discovery rate (FDR) adjusted p-values. Thousands of DEG are evident between each contrast. Table 1b shows overlap of DEG found between treatments between groups (e.g. `Ator` vs. `Lova` in `Scramble` and `Let7d`) are shown to indicate <level of similarity?>  
+
+### **Table 1b: Total DE Genes Found per Contrast**
+
+```{r table_1a}
+p05 <- t(as.data.frame(lapply(filt_res_list, function(f){dim(f)[1]})))
+p01 <- t(as.data.frame(lapply(filt_res(res_list, 0.01), function(f){dim(f)[1]})))
+p001 <- filt_res(res_list, 0.001)
+p001d <- t(as.data.frame(lapply(filt_res(res_list, 0.001), function(f){dim(f)[1]})))
+cba <- cbind(p001d, p01, p05)
+colnames(cba) <- c("p < 0.001", "p < 0.01", "p < 0.05")
+knitr::kable(cba)
+```
+
+### **Table 1b: Overlap of DE Genes Found per Contrast Between Groups (padj < 0.01)**
+
+```{r table_1b}
+conts <- c("x_None_vs_x_TNFa", "x_Ator_vs_x_TNFa", "x_Lova_vs_x_TNFa")
+cont_list <- lapply(conts, function(f){
+  fx1 <- gsub("x", "Scramble", f)
+  fx2 <- gsub("x", "Let7d", f)
+
+  x1 <- p001[[fx1]]
+  x2 <- p001[[fx2]]
+  x12 <- unique(c(x1$ensembl_gene_id, x2$ensembl_gene_id))
+  ix12 <- x1$ensembl_gene_id %in% x2$ensembl_gene_id
+  gx12 <- x1$external_gene_name[ix12]
+  ex12 <- x1$ensembl_gene_id[ix12]
+  tx12 <- table(ix12)
+  tx12$pc <- round(100*tx12[["TRUE"]]/length(x12), 2)
+  
+  names(tx12) <- c("Unique", "Overlap", "Overlap %")
+  tx21 <- dplyr::left_join(x1, x2)
+  return(list(overlap_num = tx12, 
+              overlap_ens = gx12,
+              overlap_ext = ex12))
+})
+
+names(cont_list) <- gsub("x_", "", conts)
+overlap_num <- lapply(cont_list, function(f){ unlist(f[[1]]) })
+
+cbb <- t(tibble::as_tibble(overlap_num))
+colnames(cbb) <- names(overlap_num[[1]])
+
+knitr::kable(cbb)
+```
+
+## **QC Plots**
+
+```{r qc_plots}
+vsd <- DESeq2::vst(dds, blind = TRUE)
+sampleDists <- dist(t(SummarizedExperiment::assay(vsd)))
+hc <- hclust(sampleDists)
+sampleDistMatrix <- as.matrix(sampleDists)
+coldata_s <- coldata$group_drug
+names(coldata_s) <- coldata$sampleID
+colnames(sampleDistMatrix) <- rownames(sampleDistMatrix) <- hc$labels <- coldata_s[match(colnames(sampleDistMatrix), names(coldata_s))]
+colors <- grDevices::colorRampPalette( rev(RColorBrewer::brewer.pal(9, "Blues")) )(256)
+
+bmpcaplots <- RNAseqon::BMplotPCA(vsd, intgroup = "group_drug", anno_tb = anno_tb, pc_limit = 5)
+```
+
+### **Heatmap**
+
+```{r ebrennan_haosmc.Heatmap}
+heatmap(sampleDistMatrix, 
+        Rowv = as.dendrogram(hc),
+        symm = TRUE, 
+        col = colors,
+        margins = c(2,10), 
+        labCol = TRUE, 
+        cexRow = 0.8 )
+```
+
+### **PCA Plots**
+
+### *PCA 1 vs 2*
+
+PC 1 accounts for 41% of variance (quite a lot), and very clearly serparates based on drug treatment. Evident on the x-axis between -40, -20 are `Ator`, `Lova` treated cells, between 0 - 20 are `TNFa` treated cells, and after 40 are cells treated with no drug (`None`).
+
+PC2 accounts for 24% variance, still quite high, and is based on `Scramble`/`Let7d`.
+
+```{r ebrennan_haosmc.PCA_1_2}
+bmpcaplots[[1]][[1]]
+```
+
+### *PCA 1 vs 3*
+
+PC3 (y-axis) accounts for 10% variance, so we have attributed 3/4 total variance. This is also a biologically based PC, given that `TNFa` treated cells are clearly separated. There is also some separation of `Ator`/`Lova` treated cells from untreated `None` cells. 
+
+```{r ebrennan_haosmc.PCA_1_3}
+bmpcaplots[[1]][[2]]
+```
+
+## **Pathway Analysis**
+
+Pathways are taken from [MsigDB](https://www.gsea-msigdb.org/gsea/msigdb/)(@subramanian2011) 'Hallmark' gene sets (@liberzon2015) and analysis conducted with the `fGSEA` package (<ref>)
+
+```{r pathways}
+fgsea_contrast_list <- lapply(seq_along(res_list), function(f){
+  suppressMessages(RNAseqon::fgsea_plot(res = all_res_list[[f]], 
+                       sig_res = p001[[f]], 
+                       msigdb_species = "Homo sapiens", 
+                       msigdb_cat = "H", 
+                       gene_col = NULL, 
+                       rank_col = NULL, 
+                       padj = 0.01,
+                       output_dir = outdir, 
+                       tag = tag, 
+                       contrast = names(res_list)[f],
+                       plot_out = TRUE))
+})
+
+pc_fgsea_de_list <- RNAseqon::per_contrast_fgsea_de(fgsea_contrast_list = fgsea_contrast_list, 
+                      occupancy = 5,
+                      output_dir = outdir, 
+                      tag = tag)
+names(pc_fgsea_de_list) <- names(all_res_list)
+total_geneset <- unique(as.vector(unlist(lapply(pc_fgsea_de_list, function(f){
+    return(unlist(f[[2]]))
+  }))))
+
+
+log2tpm_tb <- tibble::as_tibble(count_se@assays@data$abundance, rownames = "ensembl_gene_id") %>%
+              dplyr::left_join(anno_tb, .) %>% 
+              dplyr::mutate(dplyr::across(where(is.numeric), round, 2)) %>%
+              dplyr::mutate(dplyr::across(where(is.numeric), log2)) %>%
+              dplyr::mutate(dplyr::across(where(is.numeric), round, 3))
+log2tpm_ninf_tb <- log2tpm_tb[!is.infinite(rowSums(log2tpm_tb[,3:dim(log2tpm_tb)[2]])),]
+log2tpm_mat <- as.matrix(log2tpm_ninf_tb[log2tpm_ninf_tb$external_gene_name %in% total_geneset,3:dim(log2tpm_tb)[2]])
+rownames(log2tpm_mat) <- unlist(log2tpm_ninf_tb[log2tpm_ninf_tb$external_gene_name %in% total_geneset, 2])
+
+de_log2tpm_mat <- log2tpm_mat[rownames(log2tpm_mat) %in% total_geneset,]
+metadata_cov <- c("group_drug")
+metadata_pca <- dplyr::select(.data = coldata, sampleID, !!metadata_cov)
+
+pc_ssgsea_list <- lapply(names(pc_fgsea_de_list), function(f){
+                      ssgsea_pca_list <- suppressMessages(RNAseqon::ssgsea_pca(pways = pc_fgsea_de_list[[f]][[2]],
+                                                    log2tpm_mat = de_log2tpm_mat,
+                                                    msigdb_cat = "H",
+                                                    output_dir = outdir,
+                                                    contrast = f,
+                                                    metadata = metadata_pca))
+                    })
+names(pc_ssgsea_list) <- names(pc_fgsea_de_list)
+```
