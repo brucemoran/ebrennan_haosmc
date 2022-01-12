@@ -22,8 +22,8 @@ shinyUI(fluidPage(
                         label = "Group",
                         choices = c("Scramble", "Let7d"),
                         selected = "Scramble"),
-            selectInput(inputId = "treatment",
-                        label = "Treamtment",
+            selectInput(inputId = "drug",
+                        label = "Drug",
                         choices = c("None", "TNFa", "Ator", "Lova"),
                         selected = "None"),
             shinyWidgets::searchInput(inputId = "gene",
@@ -31,7 +31,11 @@ shinyUI(fluidPage(
         ),
         
         mainPanel(
-            DT::renderDT("genetable")
-        )
+        tabsetPanel(
+            tabPanel("Plot", plotOutput("plotOut")
+                     )
+            ),
+            tabPanel("Table", DT::dataTableOutput("genetable"))
+        ),
     )
 ))
