@@ -36,6 +36,6 @@ shinyUI(fluidPage(
                      )
             ),
             tabPanel("Table", DT::dataTableOutput("genetable"))
-        ),
+        )
     )
 ))
